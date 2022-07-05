@@ -1,0 +1,10 @@
+important:
+- try more augmentations
+- apply individual instance mask or all?
+
+speed:
+- check speeds of image loading methods (optimize)
+- load all images as torch tensors instead of np arrays?
+- retry using Image library and attempt 4th channel
+- try mask finding methods (optimize)
+- load images as uint8 or float32/64?

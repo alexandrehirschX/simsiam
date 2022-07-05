@@ -13,6 +13,7 @@ import random
 import shutil
 import time
 import warnings
+from pprint import pprint
 
 import torch
 import torch.nn as nn
@@ -29,6 +30,8 @@ import torchvision.models as models
 
 import simsiam.loader
 import simsiam.builder
+import simsiam.transforms
+import simsiam.dataset
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -180,7 +183,7 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
         # comment out the following line for debugging
-        raise NotImplementedError("Only DistributedDataParallel is supported.")
+        #raise NotImplementedError("Only DistributedDataParallel is supported.")
     else:
         # AllGather implementation (batch shuffle, queue update, etc.) in
         # this code only supports DistributedDataParallel.
@@ -189,10 +192,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # define loss function (criterion) and optimizer
     criterion = nn.CosineSimilarity(dim=1).cuda(args.gpu)
-
     if args.fix_pred_lr:
-        optim_params = [{'params': model.module.encoder.parameters(), 'fix_lr': False},
-                        {'params': model.module.predictor.parameters(), 'fix_lr': True}]
+        optim_params = [{'params': model.encoder.parameters(), 'fix_lr': False},
+                        {'params': model.predictor.parameters(), 'fix_lr': True}]
     else:
         optim_params = model.parameters()
 
@@ -226,20 +228,33 @@ def main_worker(gpu, ngpus_per_node, args):
                                      std=[0.229, 0.224, 0.225])
 
     # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
+    # augmentation = [
+    #     transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+    #     transforms.RandomApply([
+    #         transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
+    #     ], p=0.8),
+    #     transforms.RandomGrayscale(p=0.2),
+    #     transforms.RandomApply([simsiam.loader.GaussianBlur([.1, 2.])], p=0.5),
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.ToTensor(),
+    #     normalize
+    # ]
+    
+    # New augmentation for 4-channel images (with mask)
     augmentation = [
-        transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-        transforms.RandomApply([
-            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-        ], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
-        transforms.RandomApply([simsiam.loader.GaussianBlur([.1, 2.])], p=0.5),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        normalize
+    transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+    transforms.RandomApply([
+        simsiam.transforms.ColorJitter4(0.4, 0.4, 0.4, 0.1)  # not strengthened
+    ], p=0.8),
+    simsiam.transforms.RandomGrayscale4(p=0.2),
+    transforms.RandomApply([simsiam.transforms.GaussianBlur4([.1, 2.])], p=0.5),
+    transforms.RandomHorizontalFlip(),
+    simsiam.transforms.Normalize4(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ]
 
-    train_dataset = datasets.ImageFolder(
-        traindir,
+    anndir = os.path.join(args.data, 'annotations/instances_train2014.json')
+    train_dataset = simsiam.dataset.CocoDetection_ex(
+        traindir, anndir,
         simsiam.loader.TwoCropsTransform(transforms.Compose(augmentation)))
 
     if args.distributed:
@@ -249,7 +264,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True)
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True, collate_fn=lambda x: x)
 
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -282,7 +297,15 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     model.train()
 
     end = time.time()
-    for i, (images, _) in enumerate(train_loader):
+    global printed
+    # for i, (images, _) in enumerate(train_loader):
+    for i, images in enumerate(train_loader):
+        if len(images) == 2: images, _ = images
+        # elif not printed:
+            # pprint(images)
+            # printed = True
+        else:
+            continue
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -310,6 +333,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+    filename = os.path.join("checkpoints/", filename)
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, 'model_best.pth.tar')
