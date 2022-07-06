@@ -297,15 +297,15 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     model.train()
 
     end = time.time()
-    global printed
-    # for i, (images, _) in enumerate(train_loader):
-    for i, images in enumerate(train_loader):
-        if len(images) == 2: images, _ = images
-        # elif not printed:
-            # pprint(images)
-            # printed = True
-        else:
-            continue
+    
+    for i, (images, _) in enumerate(train_loader):
+    #for i, images in enumerate(train_loader):
+        # if len(images) == 2: images, _ = images
+        # # elif not printed:
+        #     # pprint(images)
+        #     # printed = True
+        # else:
+        #     continue
         # measure data loading time
         data_time.update(time.time() - end)
 

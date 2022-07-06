@@ -4,6 +4,7 @@ import torchvision.transforms as transforms
 import torch
 
 from simsiam.loader import GaussianBlur
+#from simsiam.utils import show
 
 class ColorJitter4(transforms.ColorJitter):
     def __call__(self, img: torch.tensor):
