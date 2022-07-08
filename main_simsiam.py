@@ -14,6 +14,7 @@ import shutil
 import time
 import warnings
 from pprint import pprint
+printed = False
 
 import torch
 import torch.nn as nn
@@ -193,8 +194,8 @@ def main_worker(gpu, ngpus_per_node, args):
     # define loss function (criterion) and optimizer
     criterion = nn.CosineSimilarity(dim=1).cuda(args.gpu)
     if args.fix_pred_lr:
-        optim_params = [{'params': model.encoder.parameters(), 'fix_lr': False},
-                        {'params': model.predictor.parameters(), 'fix_lr': True}]
+        optim_params = [{'params': model.module.encoder.parameters(), 'fix_lr': False},
+                        {'params': model.module.predictor.parameters(), 'fix_lr': True}]
     else:
         optim_params = model.parameters()
 
@@ -264,9 +265,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True, collate_fn=lambda x: x)
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True) #, collate_fn=lambda x: x)
 
     for epoch in range(args.start_epoch, args.epochs):
+        print(f'{epoch = }')
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, init_lr, epoch, args)
@@ -297,36 +299,34 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     model.train()
 
     end = time.time()
-    
-    for i, (images, _) in enumerate(train_loader):
-    #for i, images in enumerate(train_loader):
-        # if len(images) == 2: images, _ = images
-        # # elif not printed:
-        #     # pprint(images)
-        #     # printed = True
-        # else:
-        #     continue
+    #for i, (images, _) in enumerate(train_loader):
+    for i, images in enumerate(train_loader):
+        if len(images) != 2:
+            print(len(images))
+        else:
+            images, _ = images
+            
         # measure data loading time
         data_time.update(time.time() - end)
-
+        print(i)
         if args.gpu is not None:
             images[0] = images[0].cuda(args.gpu, non_blocking=True)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
+        
+        # # compute output and loss
+        # p1, p2, z1, z2 = model(x1=images[0], x2=images[1])
+        # loss = -(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5
 
-        # compute output and loss
-        p1, p2, z1, z2 = model(x1=images[0], x2=images[1])
-        loss = -(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5
+        # losses.update(loss.item(), images[0].size(0))
 
-        losses.update(loss.item(), images[0].size(0))
+        # # compute gradient and do SGD step
+        # optimizer.zero_grad()
+        # loss.backward()
+        # optimizer.step()
 
-        # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+        # # measure elapsed time
+        # batch_time.update(time.time() - end)
+        # end = time.time()
 
         if i % args.print_freq == 0:
             progress.display(i)

@@ -1,10 +1,13 @@
 important:
+- why is memory leaking? 
+- figure out collate function
 - try more augmentations
 - apply individual instance mask or all?
 
+
 speed:
-- try detectron2 rasterize method for mask
-- check speeds of image loading methods (optimize)
+- DONE       try detectron2 rasterize method for mask
+- KINDA DONE check speeds of image loading methods (optimize)
 - load all images as torch tensors instead of np arrays?
 - retry using Image library and attempt 4th channel
 - try mask finding methods (optimize)

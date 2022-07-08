@@ -8,6 +8,7 @@ import torchvision.transforms as transforms
 from PIL import Image, ImageDraw 
 import numpy as np
 import torch
+from detectron2.structures import masks
 
 
 class CocoDetection_ex(datasets.CocoDetection):
@@ -26,21 +27,16 @@ class CocoDetection_ex(datasets.CocoDetection):
         id = self.ids[index]
         image, width, height = self._load_image(id)
         target = self._load_target(id)
-        
         #try with detectron2 rasterize instead
         #get mask (COCO dataset)
-        with Image.new('1', (width, height), 0) as mask:
-            for s in target:
-                polygon_coords = list(zip(*[iter(s['segmentation'][0])]*2))
-                ImageDraw.Draw(mask).polygon(polygon_coords, outline=1, fill=1)
-
-        # mask = Image.new('1', (width, height), 0)
-        # for s in target:
-        #     seg = s['segmentation'][0]
-        #     poly = list(zip(*[iter(seg)]*2))
-        #     ImageDraw.Draw(mask).polygon(poly, outline=1, fill=1)
-        M = self.T(mask)/255
-        image = torch.cat((image, M), dim=0)
+        # with Image.new('1', (width, height), 0) as mask:
+        #     for s in target:
+        #         polygon_coords = list(zip(*[iter(s['segmentation'][0])]*2))
+        #         ImageDraw.Draw(mask).polygon(polygon_coords, outline=1, fill=1)
+        #M = self.T(mask)/255
+        L = [s['segmentation'][0] for s in target]
+        mask = torch.unsqueeze(torch.from_numpy(masks.polygons_to_bitmask(L, height, width)), dim=0)
+        image = torch.cat((image, mask), dim=0)
     
         if self.transforms is not None:
             image, target = self.transforms(image, target)
