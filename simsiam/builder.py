@@ -6,13 +6,14 @@
 
 import torch
 import torch.nn as nn
+import torchvision.models as models
 
 
 class SimSiam(nn.Module):
     """
     Build a SimSiam model.
     """
-    def __init__(self, base_encoder, dim=2048, pred_dim=512):
+    def __init__(self, base_encoder, dim=2048, pred_dim=512, with_mask=False):
         """
         dim: feature dimension (default: 2048)
         pred_dim: hidden dimension of the predictor (default: 512)
@@ -23,8 +24,16 @@ class SimSiam(nn.Module):
         # num_classes is the output fc dimension, zero-initialize last BNs
         self.encoder = base_encoder(num_classes=dim, zero_init_residual=True)
 
+        #increasing dimensions for mask layer
+        if with_mask:
+            if isinstance(self.encoder, models.resnet.ResNet):
+                self.encoder.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
+                #convert to general form with __repr__
+
         # build a 3-layer projector
+        self.t = self.encoder.fc
         prev_dim = self.encoder.fc.weight.shape[1]
+
         self.encoder.fc = nn.Sequential(nn.Linear(prev_dim, prev_dim, bias=False),
                                         nn.BatchNorm1d(prev_dim),
                                         nn.ReLU(inplace=True), # first layer

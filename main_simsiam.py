@@ -4,7 +4,7 @@
 
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
-
+from memory_profiler import profile
 import argparse
 import builtins
 import math
@@ -33,6 +33,7 @@ import simsiam.loader
 import simsiam.builder
 import simsiam.transforms
 import simsiam.dataset
+import simsiam.model
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -127,7 +128,8 @@ def main():
     else:
         # Simply call main_worker function
         main_worker(args.gpu, ngpus_per_node, args)
-
+def coll(x):
+    return x
 
 def main_worker(gpu, ngpus_per_node, args):
     args.gpu = gpu
@@ -155,7 +157,7 @@ def main_worker(gpu, ngpus_per_node, args):
     print("=> creating model '{}'".format(args.arch))
     model = simsiam.builder.SimSiam(
         models.__dict__[args.arch],
-        args.dim, args.pred_dim)
+        args.dim, args.pred_dim, with_mask=True)
 
     # infer learning rate before changing batch size
     init_lr = args.lr * args.batch_size / 256
@@ -194,8 +196,10 @@ def main_worker(gpu, ngpus_per_node, args):
     # define loss function (criterion) and optimizer
     criterion = nn.CosineSimilarity(dim=1).cuda(args.gpu)
     if args.fix_pred_lr:
-        optim_params = [{'params': model.module.encoder.parameters(), 'fix_lr': False},
-                        {'params': model.module.predictor.parameters(), 'fix_lr': True}]
+        # optim_params = [{'params': model.module.encoder.parameters(), 'fix_lr': False},
+        #                {'params': model.module.predictor.parameters(), 'fix_lr': True}]
+        optim_params = [{'params': model.encoder.parameters(), 'fix_lr': False},
+                        {'params': model.predictor.parameters(), 'fix_lr': True}]
     else:
         optim_params = model.parameters()
 
@@ -225,22 +229,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Data loading code
     traindir = os.path.join(args.data, 'train')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+
 
     # MoCo v2's aug: similar to SimCLR https://arxiv.org/abs/2002.05709
-    # augmentation = [
-    #     transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
-    #     transforms.RandomApply([
-    #         transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-    #     ], p=0.8),
-    #     transforms.RandomGrayscale(p=0.2),
-    #     transforms.RandomApply([simsiam.loader.GaussianBlur([.1, 2.])], p=0.5),
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.ToTensor(),
-    #     normalize
-    # ]
-    
     # New augmentation for 4-channel images (with mask)
     augmentation = [
     transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
@@ -263,9 +254,11 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         train_sampler = None
 
+
+
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, drop_last=True) #, collate_fn=lambda x: x)
+        num_workers=args.workers, sampler=train_sampler, drop_last=True, pin_memory=True, collate_fn=coll)
 
     for epoch in range(args.start_epoch, args.epochs):
         print(f'{epoch = }')
@@ -275,7 +268,6 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
-
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
             save_checkpoint({
@@ -286,6 +278,9 @@ def main_worker(gpu, ngpus_per_node, args):
             }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
+
+
+#@profile
 def train(train_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
@@ -300,33 +295,43 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
     end = time.time()
     #for i, (images, _) in enumerate(train_loader):
-    for i, images in enumerate(train_loader):
-        if len(images) != 2:
-            print(len(images))
-        else:
-            images, _ = images
+    for i, images1 in enumerate(train_loader):
+
+        # if len(images) != 2:
+        #     print(len(images))
+        # else:
+        #     images, _ = images
             
         # measure data loading time
         data_time.update(time.time() - end)
-        print(i)
-        if args.gpu is not None:
-            images[0] = images[0].cuda(args.gpu, non_blocking=True)
-            images[1] = images[1].cuda(args.gpu, non_blocking=True)
+        #print(i)
+
+        images_l = []
+        images_r = []
+        # compute output and loss
+        for images, _ in images1:
+            if args.gpu is not None:
+                images[0] = images[0].cuda(args.gpu, non_blocking=True)
+                images[1] = images[1].cuda(args.gpu, non_blocking=True)
+            images_l.append(images[0])
+            images_r.append(images[1])
+            # print(images[0].shape)
+            # print(images[1].shape)
+            # return
         
-        # # compute output and loss
-        # p1, p2, z1, z2 = model(x1=images[0], x2=images[1])
-        # loss = -(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5
+        p1, p2, z1, z2 = model(x1=torch.stack(images_l), x2=torch.stack(images_r))
+        loss = -(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5
 
-        # losses.update(loss.item(), images[0].size(0))
+        losses.update(loss.item(), images[0].size(0))
 
-        # # compute gradient and do SGD step
-        # optimizer.zero_grad()
-        # loss.backward()
-        # optimizer.step()
+        # compute gradient and do SGD step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-        # # measure elapsed time
-        # batch_time.update(time.time() - end)
-        # end = time.time()
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
 
         if i % args.print_freq == 0:
             progress.display(i)
