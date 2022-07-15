@@ -31,7 +31,6 @@ class SimSiam(nn.Module):
                 #convert to general form with __repr__
 
         # build a 3-layer projector
-        self.t = self.encoder.fc
         prev_dim = self.encoder.fc.weight.shape[1]
 
         self.encoder.fc = nn.Sequential(nn.Linear(prev_dim, prev_dim, bias=False),

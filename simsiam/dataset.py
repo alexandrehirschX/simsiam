@@ -25,21 +25,18 @@ class CocoDetection_ex(datasets.CocoDetection):
         self.iscrowd = False
         self.ids = [(i["image_id"], i["id"]) for i in self.coco.loadAnns(self.coco.getAnnIds(iscrowd=self.iscrowd))]
 
-
     def _load_image(self, id: int) -> torch.Tensor:
         path = os.path.join(self.root, self.coco.loadImgs(id)[0]["file_name"])
         return io.read_image(path, mode=io.image.ImageReadMode.RGB)/255
 
     def _load_target(self, id: int) -> Any:
         return self.coco.loadAnns(id)[0]
-
+    
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
         image_id, id = self.ids[index]
         image = self._load_image(image_id)
         target = self._load_target(id)
         #replaced detectron2 structures mask method
         mask = torch.from_numpy(self.coco.annToMask(target))[None, :, :]
-        image = torch.cat((image, mask), dim=0)
-        if self.transforms is not None:
-            image, target = self.transforms(image, target)
-        return image, target
+        image = self.transform(torch.cat((image, mask), dim=0))
+        return image, torch.tensor(target['category_id'])

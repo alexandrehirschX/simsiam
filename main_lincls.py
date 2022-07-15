@@ -27,6 +27,9 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
+import simsiam.transforms
+import simsiam.dataset
+
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
@@ -151,6 +154,8 @@ def main_worker(gpu, ngpus_per_node, args):
     # create model
     print("=> creating model '{}'".format(args.arch))
     model = models.__dict__[args.arch]()
+    
+    model.conv1 = nn.Conv2d(4, 64, kernel_size=7, stride=2, padding=3, bias=False)
 
     # freeze all layers but the last fc
     for name, param in model.named_parameters():
@@ -161,6 +166,7 @@ def main_worker(gpu, ngpus_per_node, args):
     model.fc.bias.data.zero_()
 
     # load from pre-trained, before DistributedDataParallel constructor
+    import pprint
     if args.pretrained:
         if os.path.isfile(args.pretrained):
             print("=> loading checkpoint '{}'".format(args.pretrained))
@@ -170,14 +176,18 @@ def main_worker(gpu, ngpus_per_node, args):
             state_dict = checkpoint['state_dict']
             for k in list(state_dict.keys()):
                 # retain only encoder up to before the embedding layer
-                if k.startswith('module.encoder') and not k.startswith('module.encoder.fc'):
+                # if k.startswith('module.encoder') and not k.startswith('module.encoder.fc'):
+                #     # remove prefix
+                #     state_dict[k[len("module.encoder."):]] = state_dict[k]
+                # single gpu version 
+                if k.startswith('encoder') and not k.startswith('encoder.fc'):
                     # remove prefix
-                    state_dict[k[len("module.encoder."):]] = state_dict[k]
+                    state_dict[k[len("encoder."):]] = state_dict[k]
                 # delete renamed or unused k
                 del state_dict[k]
-
             args.start_epoch = 0
             msg = model.load_state_dict(state_dict, strict=False)
+            #pprint.pprint(msg)
             assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
 
             print("=> loaded pre-trained model '{}'".format(args.pretrained))
@@ -258,17 +268,20 @@ def main_worker(gpu, ngpus_per_node, args):
     # Data loading code
     traindir = os.path.join(args.data, 'train')
     valdir = os.path.join(args.data, 'val')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transforms.Compose([
+    normalize = simsiam.transforms.Normalize4(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    train_tf = transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
+            #transforms.ToTensor(),
             normalize,
-        ]))
+        ])
+
+    train_anndir = os.path.join(args.data, 'annotations/instances_train2014.json')
+    val_anndir = os.path.join(args.data, 'annotations/instances_val2014.json')
+
+    train_dataset = simsiam.dataset.CocoDetection_ex(
+        traindir, train_anndir,
+        train_tf)
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -280,10 +293,10 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
+        simsiam.dataset.CocoDetection_ex(valdir, val_anndir, transforms.Compose([
             transforms.Resize(256),
             transforms.CenterCrop(224),
-            transforms.ToTensor(),
+            #transforms.ToTensor(),
             normalize,
         ])),
         batch_size=256, shuffle=False,
@@ -346,8 +359,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        if args.gpu is not None:
-            images = images.cuda(args.gpu, non_blocking=True)
+        #if args.gpu is not None:
+        images = images.cuda(args.gpu, non_blocking=True)
         target = target.cuda(args.gpu, non_blocking=True)
 
         # compute output
@@ -417,7 +430,7 @@ def validate(val_loader, model, criterion, args):
     return top1.avg
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, filename='checkpoints2/checkpoint.pth.tar'):
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, 'model_best.pth.tar')
@@ -438,8 +451,7 @@ def sanity_check(state_dict, pretrained_weights):
             continue
 
         # name in pretrained model
-        k_pre = 'module.encoder.' + k[len('module.'):] \
-            if k.startswith('module.') else 'module.encoder.' + k
+        k_pre = 'encoder.' + k
 
         assert ((state_dict[k].cpu() == state_dict_pre[k_pre]).all()), \
             '{} is changed in linear classifier training.'.format(k)

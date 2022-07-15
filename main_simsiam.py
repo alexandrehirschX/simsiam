@@ -128,8 +128,6 @@ def main():
     else:
         # Simply call main_worker function
         main_worker(args.gpu, ngpus_per_node, args)
-def coll(x):
-    return x
 
 def main_worker(gpu, ngpus_per_node, args):
     args.gpu = gpu
@@ -218,6 +216,9 @@ def main_worker(gpu, ngpus_per_node, args):
                 loc = 'cuda:{}'.format(args.gpu)
                 checkpoint = torch.load(args.resume, map_location=loc)
             args.start_epoch = checkpoint['epoch']
+            #left unwanted attributes
+            del checkpoint['state_dict']["t.weight"]
+            del checkpoint['state_dict']["t.bias"]
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -258,7 +259,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, sampler=train_sampler, drop_last=True, pin_memory=True, collate_fn=coll)
+        num_workers=args.workers, sampler=train_sampler, drop_last=True, pin_memory=True)
 
     for epoch in range(args.start_epoch, args.epochs):
         print(f'{epoch = }')
@@ -294,32 +295,22 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     model.train()
 
     end = time.time()
-    #for i, (images, _) in enumerate(train_loader):
-    for i, images1 in enumerate(train_loader):
 
-        # if len(images) != 2:
-        #     print(len(images))
-        # else:
-        #     images, _ = images
+    for i, (images, _) in enumerate(train_loader):
+
             
         # measure data loading time
         data_time.update(time.time() - end)
-        #print(i)
-
-        images_l = []
-        images_r = []
         # compute output and loss
-        for images, _ in images1:
-            if args.gpu is not None:
-                images[0] = images[0].cuda(args.gpu, non_blocking=True)
-                images[1] = images[1].cuda(args.gpu, non_blocking=True)
-            images_l.append(images[0])
-            images_r.append(images[1])
+        #if args.gpu is not None:
+        images[0] = images[0].cuda(args.gpu, non_blocking=True)
+        images[1] = images[1].cuda(args.gpu, non_blocking=True)
+
             # print(images[0].shape)
             # print(images[1].shape)
             # return
         
-        p1, p2, z1, z2 = model(x1=torch.stack(images_l), x2=torch.stack(images_r))
+        p1, p2, z1, z2 = model(x1=images[0], x2=images[1])
         loss = -(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5
 
         losses.update(loss.item(), images[0].size(0))
@@ -338,7 +329,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    filename = os.path.join("checkpoints/", filename)
+    filename = os.path.join("checkpoints_new/", filename)
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, 'model_best.pth.tar')
